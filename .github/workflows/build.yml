@@ -64,7 +64,7 @@ jobs:
         id: ndk-cache
         with:
           path: build/android-ndk-r29
-          key: ndk-r29-linux
+          key: ndk-r25-linux
 
       - name: Download NDK
         if: steps.ndk-cache.outputs.cache-hit != 'true'
