@@ -39,13 +39,21 @@ jobs:
       - name: Download NDK
         shell: powershell
         run: |
-          if (!(Test-Path "build")) { New-Item -ItemType Directory -Path "build" }
-          if (!(Test-Path "build/android-ndk-r29")) {
-            Invoke-WebRequest -Uri "https://dl.google.com/android/repository/android-ndk-r29-linux.zip" -OutFile "build/ndk.zip"
-            Expand-Archive -Path "build/ndk.zip" -DestinationPath "build/"
-            Move-Item -Path "build/android-ndk-r29*" -Destination "build/android-ndk-r29"
-            Remove-Item "build/ndk.zip"
-          }
+          if (Test-Path "build") { Remove-Item -Path "build" -Recurse -Force }
+          New-Item -ItemType Directory -Path "build"
+          
+          # 2. Download
+          Invoke-WebRequest -Uri "https://dl.google.com/android/repository/android-ndk-r29-linux.zip" -OutFile "build/ndk.zip"
+          
+          # 3. Use Expand-Archive with -Force to overwrite/ensure clean extraction
+          Expand-Archive -Path "build/ndk.zip" -DestinationPath "build/" -Force
+          
+          # 4. Rename: Ensure we find the folder regardless of exact naming (NDK folders often have version suffixes)
+          $ndkDir = Get-ChildItem -Path "build" -Directory | Where-Object { $_.Name -like "android-ndk-r29*" }
+          Rename-Item -Path $ndkDir.FullName -NewName "android-ndk-r29"
+          
+          # 5. Cleanup zip
+          Remove-Item "build/ndk.zip"
 
       - name: Build and Patch
         shell: powershell
