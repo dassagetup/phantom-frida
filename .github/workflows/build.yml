@@ -32,23 +32,27 @@ jobs:
       - name: Setup Dependencies
         shell: powershell
         run: |
-          # Verify Python and Git are available
           python --version
           git --version
 
-      - name: Download NDK
+      - name: Download and Extract NDK
         shell: powershell
         run: |
+          # 1. Clean start
           if (Test-Path "build") { Remove-Item -Path "build" -Recurse -Force }
           New-Item -ItemType Directory -Path "build"
           
           # 2. Download
-          Invoke-WebRequest -Uri "https://dl.google.com/android/repository/android-ndk-r29-linux.zip" -OutFile "build/ndk.zip"
+          $wc = New-Object System.Net.WebClient
+          $wc.DownloadFile("https://dl.google.com/android/repository/android-ndk-r29-linux.zip", "build/ndk.zip")
           
-          # 3. Use Expand-Archive with -Force to overwrite/ensure clean extraction
-          Expand-Archive -Path "build/ndk.zip" -DestinationPath "build/" -Force
+          # 3. Robust Extraction using Shell.Application (prevents path errors)
+          $shell = New-Object -ComObject Shell.Application
+          $zipFile = Get-Item "build/ndk.zip"
+          $destination = Get-Item "build"
+          $shell.NameSpace($destination.FullName).CopyHere($shell.NameSpace($zipFile.FullName).Items())
           
-          # 4. Rename: Ensure we find the folder regardless of exact naming (NDK folders often have version suffixes)
+          # 4. Rename: Ensure we find the folder regardless of exact naming
           $ndkDir = Get-ChildItem -Path "build" -Directory | Where-Object { $_.Name -like "android-ndk-r29*" }
           Rename-Item -Path $ndkDir.FullName -NewName "android-ndk-r29"
           
@@ -64,10 +68,11 @@ jobs:
           }
           
           # Execute build script
+          # Note: Backticks (`) are the correct line-continuation character in PowerShell
           python build.py --version ${{ inputs.frida_version }} `
             --name ${{ inputs.custom_name }} `
             --arch ${{ inputs.arch }} `
-            --skip-clone --ndk-path build/android-ndk-r29 `
+            --skip-clone --ndk-path "$PWD/build/android-ndk-r29" `
             --extended --verify
 
       - name: Upload Frida Server
