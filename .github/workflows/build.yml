@@ -26,25 +26,21 @@ jobs:
   build:
     runs-on: self-hosted
     timeout-minutes: 120
-    defaults:
-      run:
-        shell: bash -i {0}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: System info
+        shell: pwsh
         run: |
-          echo "=== WSL/Linux Environment ==="
-          uname -a
-          python3 --version
-          git --version
-          echo "CPU cores: $(nproc)"
-          echo "Free disk: $(df -h / | tail -1 | awk '{print $4}')"
+          Write-Host "=== WSL/Linux Environment ===" -ForegroundColor Green
+          wsl bash -c 'uname -a; python3 --version; git --version; echo "CPU cores: $(nproc)"; echo "Free disk: $(df -h / | tail -1 | awk '\''{print $4}'\'')"'
 
       - name: Install dependencies (WSL)
+        shell: pwsh
         run: |
+          wsl bash -c @'
           set -e
           echo "=== Updating package manager ==="
           sudo apt-get update -qq
@@ -60,13 +56,15 @@ jobs:
             wget
           
           echo "=== Dependency installation complete ==="
+'@
 
       - name: Setup build directory
+        shell: pwsh
         run: |
+          wsl bash -c @'
           set -e
           echo "=== Preparing build environment ==="
           
-          # Clean and create build directory
           if [ -d "build" ]; then
             echo "Removing existing build directory..."
             rm -rf build
@@ -76,9 +74,12 @@ jobs:
           cd build
           pwd
           echo "=== Build directory ready ==="
+'@
 
       - name: Download NDK (Linux version for WSL)
+        shell: pwsh
         run: |
+          wsl bash -c @'
           set -e
           echo "=== Downloading Android NDK r29 (Linux) ==="
           cd build
@@ -98,7 +99,6 @@ jobs:
           unzip -q "$NDK_FILE"
           rm "$NDK_FILE"
           
-          # Verify extraction
           if [ -d "android-ndk-r29" ]; then
             echo "✓ NDK extracted successfully"
           else
@@ -107,9 +107,12 @@ jobs:
           fi
           
           echo "=== Build environment ready ==="
+'@
 
       - name: Build Frida
+        shell: pwsh
         run: |
+          wsl bash -c @'
           set -e
           cd build
           pwd
@@ -132,15 +135,17 @@ jobs:
             --extended
           
           echo "✓ Build complete"
+'@
 
       - name: Verify Output
+        shell: pwsh
         run: |
-          if [ -d "build/output" ]; then
-            echo "=== Output artifacts ==="
-            ls -lh build/output/
-          else
-            echo "WARNING: Output directory not found"
-          fi
+          if (Test-Path "build/output") {
+            Write-Host "=== Output artifacts ===" -ForegroundColor Green
+            Get-ChildItem -Path "build/output/" -Force
+          } else {
+            Write-Host "WARNING: Output directory not found" -ForegroundColor Yellow
+          }
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
