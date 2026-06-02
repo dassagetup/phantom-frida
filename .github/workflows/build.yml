@@ -30,59 +30,150 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Dependencies
-        shell: powershell
+        shell: pwsh
         run: |
+          Write-Host "Checking Python and Git..."
           python --version
           git --version
+          Write-Host "Environment setup complete"
 
       - name: Download and Extract NDK
-        shell: powershell
+        shell: pwsh
         run: |
-          # 1. Clean start
-          if (Test-Path "build") { Remove-Item -Path "build" -Recurse -Force }
-          New-Item -ItemType Directory -Path "build"
+          # Set error action preference to stop on errors
+          $ErrorActionPreference = "Stop"
           
-          # 2. Download Windows NDK
-          $wc = New-Object System.Net.WebClient
-          $wc.DownloadFile("https://dl.google.com/android/repository/android-ndk-r29-windows.zip", "build/ndk.zip")
+          Write-Host "Step 1: Clean start"
+          if (Test-Path "build") { 
+            Remove-Item -Path "build" -Recurse -Force -ErrorAction SilentlyContinue
+          }
+          New-Item -ItemType Directory -Path "build" -Force | Out-Null
           
-          # 3. Extract using native PowerShell
-          Expand-Archive -Path "build/ndk.zip" -DestinationPath "build" -Force
+          Write-Host "Step 2: Download Windows NDK (~1.5 GB)"
+          $ndkUrl = "https://dl.google.com/android/repository/android-ndk-r29-windows-x86_64.zip"
+          $ndkZipPath = "$PWD\build\ndk.zip"
           
-          # 4. Verify extraction and rename if needed
-          if (Test-Path "build/android-ndk-r29") {
+          try {
+            $WebClient = New-Object System.Net.WebClient
+            $WebClient.DownloadFile($ndkUrl, $ndkZipPath)
+            Write-Host "NDK download complete"
+          } catch {
+            Write-Error "Failed to download NDK: $_"
+            exit 1
+          }
+          
+          Write-Host "Step 3: Extract using PowerShell"
+          try {
+            Expand-Archive -Path $ndkZipPath -DestinationPath "$PWD\build" -Force
+            Write-Host "NDK extraction complete"
+          } catch {
+            Write-Error "Failed to extract NDK: $_"
+            exit 1
+          }
+          
+          Write-Host "Step 4: Verify extraction and rename if needed"
+          if (Test-Path "$PWD\build\android-ndk-r29") {
             Write-Host "NDK already in correct location"
           } else {
-            $ndkDir = Get-ChildItem -Path "build" -Directory | Where-Object { $_.Name -like "android-ndk-r29*" }
-            if ($ndkDir) {
-              Rename-Item -Path $ndkDir.FullName -NewName "android-ndk-r29"
-              Write-Host "Renamed NDK folder"
+            $ndkDirs = Get-ChildItem -Path "$PWD\build" -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "android-ndk-r29*" }
+            if ($ndkDirs) {
+              foreach ($dir in $ndkDirs) {
+                if ($dir.Name -ne "android-ndk-r29") {
+                  Rename-Item -Path $dir.FullName -NewName "android-ndk-r29" -Force
+                  Write-Host "Renamed NDK folder from $($dir.Name) to android-ndk-r29"
+                  break
+                }
+              }
             } else {
-              Write-Host "Warning: NDK folder not found"
+              Write-Error "NDK folder not found after extraction. Contents of build directory:"
+              Get-ChildItem -Path "$PWD\build" -Recurse | Select-Object -First 20 | ForEach-Object { Write-Host $_.FullName }
+              exit 1
             }
           }
           
-          # 5. Cleanup zip
-          Remove-Item "build/ndk.zip" -Force
-
-      - name: Build and Patch
-        shell: powershell
-        run: |
-          # Clone Frida source
-          if (!(Test-Path "build/frida")) {
-            git clone --recurse-submodules --branch ${{ inputs.frida_version }} --depth 1 https://github.com/frida/frida.git build/frida
+          Write-Host "Step 5: Cleanup and verify"
+          if (Test-Path $ndkZipPath) {
+            Remove-Item $ndkZipPath -Force
+            Write-Host "Removed NDK zip file"
           }
           
-          # Execute build script for Frida server
-          python build.py --version ${{ inputs.frida_version }} `
-            --name ${{ inputs.custom_name }} `
-            --arch ${{ inputs.arch }} `
-            --skip-clone --ndk-path "$PWD/build/android-ndk-r29" `
-            --extended --verify
+          if (Test-Path "$PWD\build\android-ndk-r29") {
+            Write-Host "NDK verification: OK"
+            Get-ChildItem -Path "$PWD\build\android-ndk-r29" | Select-Object -First 5
+          } else {
+            Write-Error "NDK verification failed - directory not found"
+            exit 1
+          }
+
+      - name: Build and Patch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          
+          Write-Host "Step 1: Clone Frida source"
+          if (!(Test-Path "build\frida")) {
+            Write-Host "Cloning Frida ${{ inputs.frida_version }} (this may take several minutes)..."
+            & git clone --recurse-submodules --branch ${{ inputs.frida_version }} --depth 1 `
+              https://github.com/frida/frida.git build\frida
+            
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "Failed to clone Frida repository"
+              exit 1
+            }
+            Write-Host "Clone complete"
+          } else {
+            Write-Host "Using existing Frida source"
+          }
+          
+          Write-Host "Step 2: Execute build script"
+          $pythonCmd = @(
+            "build.py",
+            "--version", "${{ inputs.frida_version }}",
+            "--name", "${{ inputs.custom_name }}",
+            "--arch", "${{ inputs.arch }}",
+            "--skip-clone",
+            "--ndk-path", "$PWD\build\android-ndk-r29",
+            "--extended",
+            "--verify"
+          )
+          
+          Write-Host "Running: python $($pythonCmd -join ' ')"
+          & python @pythonCmd
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Build script failed with exit code $LASTEXITCODE"
+            exit 1
+          }
+          
+          Write-Host "Build complete"
+
+      - name: Verify Output
+        shell: pwsh
+        run: |
+          Write-Host "Checking output artifacts..."
+          if (Test-Path "output") {
+            Get-ChildItem -Path "output" -Recurse | ForEach-Object {
+              $size = [math]::Round($_.Length / 1MB, 2)
+              Write-Host "$($_.Name): $size MB"
+            }
+          } else {
+            Write-Warning "Output directory not found"
+          }
 
       - name: Upload Frida Server
         uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: ${{ inputs.custom_name }}-server-${{ inputs.arch }}
           path: output/*server*
           retention-days: 7
+          if-no-files-found: warn
+
+      - name: Upload Frida Gadget
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: ${{ inputs.custom_name }}-gadget-${{ inputs.arch }}
+          path: output/*gadget*
+          retention-days: 7
+          if-no-files-found: warn
