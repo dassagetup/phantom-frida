@@ -30,19 +30,28 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Prepare Runner Environment (CRITICAL)
+        shell: bash
         run: |
-          # Free disk space by removing unused bulky packages
-          sudo apt-get purge -y azure-cli google-chrome-stable firefox powershell
-          sudo apt-get autoremove -y
-          
-          # Add Swap to prevent OOM Kill (Exit Code 1)
-          sudo fallocate -l 10G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+            # Keep all original cleanup and swap logic for Linux/VM runners
+            sudo apt-get purge -y azure-cli google-chrome-stable firefox powershell || true
+            sudo apt-get autoremove -y || true
+            sudo fallocate -l 10G /swapfile || true
+            sudo chmod 600 /swapfile || true
+            sudo mkswap /swapfile || true
+            sudo swapon /swapfile || true
+          else
+            echo "Running on Windows: Skipping Linux-specific system tuning."
+          fi
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential curl git python3 unzip
+        shell: bash
+        run: |
+          if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+            sudo apt-get update && sudo apt-get install -y build-essential curl git python3 unzip
+          else
+            echo "Assuming dependencies are pre-installed on Windows host."
+          fi
 
       - name: Cache NDK
         uses: actions/cache@v4
@@ -53,17 +62,18 @@ jobs:
 
       - name: Download NDK
         if: steps.ndk-cache.outputs.cache-hit != 'true'
+        shell: bash
         run: |
           mkdir -p build
           curl -L -o build/ndk.zip https://dl.google.com/android/repository/android-ndk-r29-linux.zip
           cd build && unzip -q ndk.zip && mv android-ndk-r29* android-ndk-r29 && rm ndk.zip
 
       - name: Build and Patch
+        shell: bash
         run: |
-          # Clone and build in one pass to save disk usage
+          # Keep original logic
           git clone --recurse-submodules --branch ${{ inputs.frida_version }} --depth 1 https://github.com/frida/frida.git build/frida
           
-          # Use build.py directly with verbose output to catch errors
           python3 build.py --version ${{ inputs.frida_version }} \
             --name ${{ inputs.custom_name }} \
             --arch ${{ inputs.arch }} \
