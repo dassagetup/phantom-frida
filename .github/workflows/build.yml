@@ -24,11 +24,8 @@ on:
       extended:
         description: 'Enable extended anti-detection'
         required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
+        default: false
+        type: boolean
 
 jobs:
   build:
@@ -79,7 +76,7 @@ jobs:
             rm -rf build
           fi
           
-          mkdir -p build
+          mkdir -p build output
           cd build
           pwd
           echo "=== Build directory ready ==="
@@ -94,8 +91,8 @@ jobs:
           NDK_FILE="android-ndk-r29-linux.zip"
           
           if [ ! -f "$NDK_FILE" ]; then
-            echo "Fetching NDK (~1.5 GB, may take 5-10 minutes)..."
-            curl -L -o "$NDK_FILE" "$NDK_URL"
+            echo "Fetching NDK (~1.5 GB, may take 10-15 minutes)..."
+            curl -L --progress-bar -o "$NDK_FILE" "$NDK_URL"
             echo "Download complete"
           else
             echo "NDK already exists, skipping download"
@@ -107,8 +104,10 @@ jobs:
           
           if [ -d "android-ndk-r29" ]; then
             echo "✓ NDK extracted successfully"
+            ls -d android-ndk-r29
           else
             echo "ERROR: NDK extraction failed"
+            ls -la
             exit 1
           fi
           
@@ -121,35 +120,9 @@ jobs:
           pwd
           
           echo "=== Starting Frida build process ==="
-          python3 build.py \
-            --version "${{ inputs.frida_version }}" \
-            --name "${{ inputs.custom_name }}" \
-            --arch "${{ inputs.arch }}" \
-            --work-dir ./build \
-            --output-dir ./output \
-            --ndk-path ./build/android-ndk-r29 \
-            --extended=${{ inputs.extended }} \
-            --verify
           
-          echo "✓ Build complete"
-
-      - name: Verify Output
-        if: always()
-        run: |
-          if [ -d "output" ]; then
-            echo "=== Output artifacts ==="
-            ls -lh output/
-            du -sh output/*
-          else
-            echo "WARNING: Output directory not found"
-            exit 1
-          fi
-
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        if: success()
-        with:
-          name: ${{ inputs.custom_name }}-${{ inputs.arch }}
-          path: output/
-          retention-days: 7
-          if-no-files-found: error
+          # Build command with conditional extended flag
+          BUILD_CMD="python3 build.py --version '${{ inputs.frida_version }}' --name '${{ inputs.custom_name }}' --arch '${{ inputs.arch }}' --work-dir ./build --output-dir ./output --ndk-path ./build/android-ndk-r29 --verify"
+          
+          # Add extended flag only if true (boolean type](#)
+
