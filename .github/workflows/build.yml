@@ -12,7 +12,7 @@ on:
         required: true
         default: 'ajeossida'
       arch:
-        description: 'Emulator Arch (x86_64 for standard emulators, arm64 for Apple Silicon/Advanced)'
+        description: 'Emulator Arch'
         required: true
         default: 'android-x86_64'
         type: choice
@@ -29,56 +29,38 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare Runner Environment (CRITICAL)
-        shell: bash
+      - name: Setup Dependencies
+        shell: powershell
         run: |
-          if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-            # Keep all original cleanup and swap logic for Linux/VM runners
-            sudo apt-get purge -y azure-cli google-chrome-stable firefox powershell || true
-            sudo apt-get autoremove -y || true
-            sudo fallocate -l 10G /swapfile || true
-            sudo chmod 600 /swapfile || true
-            sudo mkswap /swapfile || true
-            sudo swapon /swapfile || true
-          else
-            echo "Running on Windows: Skipping Linux-specific system tuning."
-          fi
-
-      - name: Install dependencies
-        shell: bash
-        run: |
-          if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-            sudo apt-get update && sudo apt-get install -y build-essential curl git python3 unzip
-          else
-            echo "Assuming dependencies are pre-installed on Windows host."
-          fi
-
-      - name: Cache NDK
-        uses: actions/cache@v4
-        id: ndk-cache
-        with:
-          path: build/android-ndk-r29
-          key: ndk-r29-linux
+          # Verify Python and Git are available
+          python --version
+          git --version
 
       - name: Download NDK
-        if: steps.ndk-cache.outputs.cache-hit != 'true'
-        shell: bash
+        shell: powershell
         run: |
-          mkdir -p build
-          curl -L -o build/ndk.zip https://dl.google.com/android/repository/android-ndk-r29-linux.zip
-          cd build && unzip -q ndk.zip && mv android-ndk-r29* android-ndk-r29 && rm ndk.zip
+          if (!(Test-Path "build")) { New-Item -ItemType Directory -Path "build" }
+          if (!(Test-Path "build/android-ndk-r29")) {
+            Invoke-WebRequest -Uri "https://dl.google.com/android/repository/android-ndk-r29-linux.zip" -OutFile "build/ndk.zip"
+            Expand-Archive -Path "build/ndk.zip" -DestinationPath "build/"
+            Move-Item -Path "build/android-ndk-r29*" -Destination "build/android-ndk-r29"
+            Remove-Item "build/ndk.zip"
+          }
 
       - name: Build and Patch
-        shell: bash
+        shell: powershell
         run: |
-          # Keep original logic
-          git clone --recurse-submodules --branch ${{ inputs.frida_version }} --depth 1 https://github.com/frida/frida.git build/frida
+          # Clone Frida source
+          if (!(Test-Path "build/frida")) {
+            git clone --recurse-submodules --branch ${{ inputs.frida_version }} --depth 1 https://github.com/frida/frida.git build/frida
+          }
           
-          python3 build.py --version ${{ inputs.frida_version }} \
-            --name ${{ inputs.custom_name }} \
-            --arch ${{ inputs.arch }} \
-            --skip-clone --ndk-path build/android-ndk-r29 \
-            --extended --verify -v
+          # Execute build script
+          python build.py --version ${{ inputs.frida_version }} `
+            --name ${{ inputs.custom_name }} `
+            --arch ${{ inputs.arch }} `
+            --skip-clone --ndk-path build/android-ndk-r29 `
+            --extended --verify
 
       - name: Upload Frida Server
         uses: actions/upload-artifact@v4
