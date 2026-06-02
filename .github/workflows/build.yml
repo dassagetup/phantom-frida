@@ -26,13 +26,15 @@ jobs:
   build:
     runs-on: self-hosted
     timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash -i {0}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: System info
-        shell: bash
         run: |
           echo "=== WSL/Linux Environment ==="
           uname -a
@@ -42,7 +44,6 @@ jobs:
           echo "Free disk: $(df -h / | tail -1 | awk '{print $4}')"
 
       - name: Install dependencies (WSL)
-        shell: bash
         run: |
           set -e
           echo "=== Updating package manager ==="
@@ -61,7 +62,6 @@ jobs:
           echo "=== Dependency installation complete ==="
 
       - name: Setup build directory
-        shell: bash
         run: |
           set -e
           echo "=== Preparing build environment ==="
@@ -78,7 +78,6 @@ jobs:
           echo "=== Build directory ready ==="
 
       - name: Download NDK (Linux version for WSL)
-        shell: bash
         run: |
           set -e
           echo "=== Downloading Android NDK r29 (Linux) ==="
@@ -110,7 +109,6 @@ jobs:
           echo "=== Build environment ready ==="
 
       - name: Build Frida
-        shell: bash
         run: |
           set -e
           cd build
@@ -136,7 +134,6 @@ jobs:
           echo "✓ Build complete"
 
       - name: Verify Output
-        shell: bash
         run: |
           if [ -d "build/output" ]; then
             echo "=== Output artifacts ==="
