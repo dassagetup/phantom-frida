@@ -4,21 +4,23 @@ on:
   workflow_dispatch:
     inputs:
       frida_version:
-        description: 'Frida version'
+        description: 'Frida version (e.g. 16.7.19)'
         required: true
-        default: '17.7.2'
+        default: '16.7.19'
       custom_name:
         description: 'Custom name'
         required: true
         default: 'ajeossida'
       arch:
-        description: 'Emulator Arch'
+        description: 'Target Architecture'
         required: true
-        default: 'android-x86_64'
+        default: 'android-arm64'
         type: choice
         options:
-          - android-x86_64
           - android-arm64
+          - android-arm
+          - android-x86_64
+          - android-x86
 
 jobs:
   build:
@@ -29,112 +31,75 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Dependencies
-        shell: pwsh
+      - name: System info
+        shell: bash
         run: |
-          python --version
+          echo "=== WSL/Linux Environment ==="
+          uname -a
+          python3 --version
           git --version
-          echo "Environment setup complete"
+          echo "CPU cores: $(nproc)"
+          echo "Free disk: $(df -h / | tail -1 | awk '{print $4}')"
 
-      - name: Download and Extract NDK
-        shell: pwsh
+      - name: Install dependencies (WSL)
+        shell: bash
         run: |
-          $ErrorActionPreference = "Stop"
+          set -e
+          echo "=== Updating package manager ==="
+          sudo apt-get update -qq
           
-          Write-Output "Step 1: Clean start"
-          if (Test-Path "build") { Remove-Item -Recurse -Force "build" }
-          New-Item -ItemType Directory -Path "build" -Force | Out-Null
+          echo "=== Installing build tools ==="
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            curl \
+            git \
+            python3 \
+            python3-pip \
+            unzip \
+            wget
           
-          Write-Output "Step 2: Download Windows NDK (~1.5 GB)"
-          Set-Location "build"
-          Invoke-WebRequest -Uri "https://dl.google.com/android/repository/android-ndk-r29-windows-x86_64.zip" `
-            -OutFile "ndk.zip" -UseBasicParsing
-          Write-Output "NDK download complete"
-          
-          Write-Output "Step 3: Extract NDK"
-          Expand-Archive -Path "ndk.zip" -DestinationPath "." -Force
-          Write-Output "NDK extraction complete"
-          
-          Write-Output "Step 4: Verify extraction and rename if needed"
-          if (Test-Path "android-ndk-r29") {
-            Write-Output "NDK already in correct location"
-          } else {
-            $ndk_dir = Get-ChildItem -Filter "android-ndk-r29*" -Directory | Select-Object -First 1
-            if ($ndk_dir) {
-              Rename-Item -Path $ndk_dir.FullName -NewName "android-ndk-r29"
-              Write-Output "Renamed NDK folder"
-            } else {
-              Write-Output "ERROR: NDK folder not found after extraction"
-              Get-ChildItem -Force
-              exit 1
-            }
-          }
-          
-          Write-Output "Step 5: Cleanup and verify"
-          Remove-Item -Force "ndk.zip"
-          Write-Output "Removed NDK zip file"
-          
-          if (Test-Path "android-ndk-r29") {
-            Write-Output "NDK verification: OK"
-            Get-ChildItem "android-ndk-r29" | Select-Object -First 10
-          } else {
-            Write-Output "ERROR: NDK verification failed"
-            exit 1
-          }
-          
-          Set-Location ".."
+          echo "=== Dependency installation complete ==="
 
-      - name: Build and Patch
-        shell: pwsh
+      - name: Setup build directory
+        shell: bash
         run: |
-          $ErrorActionPreference = "Stop"
+          set -e
+          echo "=== Preparing build environment ==="
           
-          Write-Output "Step 1: Clone Frida source"
-          if (-not (Test-Path "build/frida")) {
-            Write-Output "Cloning Frida ${{ inputs.frida_version }} (this may take several minutes)..."
-            git clone --recurse-submodules --branch "${{ inputs.frida_version }}" --depth 1 `
-              "https://github.com/frida/frida.git" "build/frida"
-            Write-Output "Clone complete"
-          } else {
-            Write-Output "Using existing Frida source"
-          }
+          # Clean and create build directory
+          if [ -d "build" ]; then
+            echo "Removing existing build directory..."
+            rm -rf build
+          fi
           
-          Write-Output "Step 2: Execute build script"
-          $ndk_path = "$(Get-Location)\build\android-ndk-r29"
-          python3 build.py `
-            --version "${{ inputs.frida_version }}" `
-            --name "${{ inputs.custom_name }}" `
-            --arch "${{ inputs.arch }}" `
-            --skip-clone `
-            --ndk-path "$ndk_path" `
-            --extended `
-            --verify
+          mkdir -p build
+          cd build
+          pwd
+          echo "=== Build directory ready ==="
 
-      - name: Verify Output
-        shell: pwsh
+      - name: Download NDK (Linux version for WSL)
+        shell: bash
         run: |
-          Write-Output "Checking output artifacts..."
-          if (Test-Path "output") {
-            Get-ChildItem -Path "output" -Recurse | 
-              ForEach-Object { if ($_.PSIsContainer) { "{0} ({1})" -f $_.FullName, (Get-ChildItem $_.FullName -Recurse | Measure-Object -Property Length -Sum).Sum } }
-          } else {
-            Write-Output "Warning: Output directory not found"
-          }
-
-      - name: Upload Frida Server
-        uses: actions/upload-artifact@v4
-        if: success()
-        with:
-          name: ${{ inputs.custom_name }}-server-${{ inputs.arch }}
-          path: output/*server*
-          retention-days: 7
-          if-no-files-found: warn
-
-      - name: Upload Frida Gadget
-        uses: actions/upload-artifact@v4
-        if: success()
-        with:
-          name: ${{ inputs.custom_name }}-gadget-${{ inputs.arch }}
-          path: output/*gadget*
-          retention-days: 7
-          if-no-files-found: warn
+          set -e
+          echo "=== Downloading Android NDK r29 (Linux) ==="
+          cd build
+          
+          NDK_URL="https://dl.google.com/android/repository/android-ndk-r29-linux.zip"
+          NDK_FILE="android-ndk-r29-linux.zip"
+          
+          if [ ! -f "$NDK_FILE" ]; then
+            echo "Fetching NDK (~1.5 GB, may take 5-10 minutes)..."
+            curl -L -o "$NDK_FILE" "$NDK_URL"
+            echo "Download complete"
+          else
+            echo "NDK already exists, skipping download"
+          fi
+          
+          echo "=== Extracting NDK ==="
+          unzip -q "$NDK_FILE"
+          rm "$NDK_FILE"
+          
+          # Verify extraction
+          if [ -d "android-ndk-r29" ]; then
+            echo "✓ NDK extracted successfully"](#)
+
