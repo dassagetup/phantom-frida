@@ -1,40 +1,24 @@
-name: Build Custom Frida
+name: Build Custom Frida for Emulator
 
 on:
   workflow_dispatch:
     inputs:
       frida_version:
-        description: 'Frida version (e.g. 17.7.2)'
+        description: 'Frida version'
         required: true
         default: '17.7.2'
       custom_name:
-        description: 'Custom name (replaces "frida" everywhere)'
+        description: 'Custom name'
         required: true
         default: 'ajeossida'
       arch:
-        description: 'Target architecture(s)'
+        description: 'Emulator Arch (x86_64 for standard emulators, arm64 for Apple Silicon/Advanced)'
         required: true
-        default: 'android-arm64'
+        default: 'android-x86_64'
         type: choice
         options:
+          - android-x86_64
           - android-arm64
-          - android-arm
-          - android-arm64,android-arm
-          - android-arm64,android-arm,android-x86_64,android-x86
-      port:
-        description: 'Custom port (empty = keep 27042)'
-        required: false
-        default: ''
-      extended:
-        description: 'Extended anti-detection (D-Bus, symbols, binary sweep)'
-        required: false
-        type: boolean
-        default: true
-      temp_fixes:
-        description: 'Stability fixes (perfetto skip, cloak detach)'
-        required: false
-        type: boolean
-        default: false
 
 jobs:
   build:
@@ -45,20 +29,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: System info
+      - name: Prepare Runner Environment (CRITICAL)
         run: |
-          echo "CPUs: $(nproc)"
-          echo "RAM: $(free -h | grep Mem | awk '{print $2}')"
-          echo "Disk: $(df -h / | tail -1 | awk '{print $4}') free"
-          python3 --version
-          git --version
+          # Free disk space by removing unused bulky packages
+          sudo apt-get purge -y azure-cli google-chrome-stable firefox powershell
+          sudo apt-get autoremove -y
+          
+          # Add Swap to prevent OOM Kill (Exit Code 1)
+          sudo fallocate -l 10G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
 
       - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential curl git python3 unzip
+        run: sudo apt-get update && sudo apt-get install -y build-essential curl git python3 unzip
 
-      # Cache NDK (~1.5 GB) — saves ~3 min on subsequent runs
       - name: Cache NDK
         uses: actions/cache@v4
         id: ndk-cache
@@ -70,96 +55,24 @@ jobs:
         if: steps.ndk-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p build
-          curl -L -o build/android-ndk-r29-linux.zip \
-            https://dl.google.com/android/repository/android-ndk-r29-linux.zip
-          cd build && unzip -q android-ndk-r29-linux.zip && rm android-ndk-r29-linux.zip
+          curl -L -o build/ndk.zip https://dl.google.com/android/repository/android-ndk-r29-linux.zip
+          cd build && unzip -q ndk.zip && mv android-ndk-r29* android-ndk-r29 && rm ndk.zip
 
-      # Cache Frida source tree — saves ~5 min clone time
-      - name: Cache Frida source
-        uses: actions/cache@v4
-        id: frida-cache
-        with:
-          path: build/frida
-          key: frida-${{ inputs.frida_version }}-source
-
-      - name: Clone Frida
-        if: steps.frida-cache.outputs.cache-hit != 'true'
+      - name: Build and Patch
         run: |
-          git clone --recurse-submodules --branch ${{ inputs.frida_version }} --depth 1 \
-            https://github.com/frida/frida.git build/frida
+          # Clone and build in one pass to save disk usage
+          git clone --recurse-submodules --branch ${{ inputs.frida_version }} --depth 1 https://github.com/frida/frida.git build/frida
+          
+          # Use build.py directly with verbose output to catch errors
+          python3 build.py --version ${{ inputs.frida_version }} \
+            --name ${{ inputs.custom_name }} \
+            --arch ${{ inputs.arch }} \
+            --skip-clone --ndk-path build/android-ndk-r29 \
+            --extended --verify -v
 
-      # If cache hit, we need a fresh copy (patches are destructive)
-      - name: Prepare fresh source from cache
-        if: steps.frida-cache.outputs.cache-hit == 'true'
-        run: |
-          # Restore to clean state (including build dir — patches are destructive)
-          cd build/frida
-          git checkout -- .
-          git submodule foreach --recursive 'git checkout -- . || true'
-          git clean -fdx || true
-          rm -rf build/
-
-      - name: Build command
-        id: cmd
-        run: |
-          CMD="python3 build.py --version ${{ inputs.frida_version }}"
-          CMD="$CMD --name ${{ inputs.custom_name }}"
-          CMD="$CMD --arch ${{ inputs.arch }}"
-          CMD="$CMD --skip-clone --ndk-path build/android-ndk-r29"
-          CMD="$CMD --verify"
-
-          if [ -n "${{ inputs.port }}" ]; then
-            CMD="$CMD --port ${{ inputs.port }}"
-          fi
-
-          if [ "${{ inputs.extended }}" = "true" ]; then
-            CMD="$CMD --extended"
-          fi
-
-          if [ "${{ inputs.temp_fixes }}" = "true" ]; then
-            CMD="$CMD --temp-fixes"
-          fi
-
-          echo "cmd=$CMD" >> $GITHUB_OUTPUT
-          echo "Will run: $CMD"
-
-      - name: Apply patches and build
-        run: ${{ steps.cmd.outputs.cmd }}
-
-      - name: List artifacts
-        run: |
-          echo "=== Build artifacts ==="
-          ls -lh output/
-          echo ""
-          echo "=== Binary verification ==="
-          for f in output/*; do
-            if [[ ! "$f" == *.gz ]]; then
-              count=$(strings "$f" | grep -c "frida" || true)
-              echo "$f: $count residual 'frida' strings"
-            fi
-          done
-
-      - name: Upload server artifacts
+      - name: Upload Frida Server
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.custom_name }}-server-${{ inputs.frida_version }}
-          path: output/${{ inputs.custom_name }}-server-*.gz
-          retention-days: 30
-          if-no-files-found: warn
-
-      - name: Upload gadget artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ inputs.custom_name }}-gadget-${{ inputs.frida_version }}
-          path: output/${{ inputs.custom_name }}-gadget-*.gz
-          retention-days: 30
-          if-no-files-found: ignore
-
-      - name: Upload uncompressed binaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ inputs.custom_name }}-${{ inputs.frida_version }}-uncompressed
-          path: |
-            output/*
-            !output/*.gz
+          name: ${{ inputs.custom_name }}-server-${{ inputs.arch }}
+          path: output/*server*
           retention-days: 7
