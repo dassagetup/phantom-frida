@@ -30,94 +30,96 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Dependencies
-        shell: bash
+        shell: pwsh
         run: |
           python --version
           git --version
           echo "Environment setup complete"
 
       - name: Download and Extract NDK
-        shell: bash
+        shell: pwsh
         run: |
-          set -e
+          $ErrorActionPreference = "Stop"
           
-          echo "Step 1: Clean start"
-          rm -rf build
-          mkdir -p build
+          Write-Output "Step 1: Clean start"
+          if (Test-Path "build") { Remove-Item -Recurse -Force "build" }
+          New-Item -ItemType Directory -Path "build" -Force | Out-Null
           
-          echo "Step 2: Download Windows NDK (~1.5 GB)"
-          cd build
-          curl -L -o ndk.zip "https://dl.google.com/android/repository/android-ndk-r29-windows-x86_64.zip"
-          echo "NDK download complete"
+          Write-Output "Step 2: Download Windows NDK (~1.5 GB)"
+          Set-Location "build"
+          Invoke-WebRequest -Uri "https://dl.google.com/android/repository/android-ndk-r29-windows-x86_64.zip" `
+            -OutFile "ndk.zip" -UseBasicParsing
+          Write-Output "NDK download complete"
           
-          echo "Step 3: Extract NDK"
-          unzip -q ndk.zip
-          echo "NDK extraction complete"
+          Write-Output "Step 3: Extract NDK"
+          Expand-Archive -Path "ndk.zip" -DestinationPath "." -Force
+          Write-Output "NDK extraction complete"
           
-          echo "Step 4: Verify extraction and rename if needed"
-          if [ -d "android-ndk-r29" ]; then
-            echo "NDK already in correct location"
-          else
-            # Find the actual NDK directory
-            ndk_dir=$(find . -maxdepth 1 -type d -name "android-ndk-r29*" | head -1)
-            if [ -n "$ndk_dir" ]; then
-              mv "$ndk_dir" android-ndk-r29
-              echo "Renamed NDK folder"
-            else
-              echo "ERROR: NDK folder not found after extraction"
-              ls -la
+          Write-Output "Step 4: Verify extraction and rename if needed"
+          if (Test-Path "android-ndk-r29") {
+            Write-Output "NDK already in correct location"
+          } else {
+            $ndk_dir = Get-ChildItem -Filter "android-ndk-r29*" -Directory | Select-Object -First 1
+            if ($ndk_dir) {
+              Rename-Item -Path $ndk_dir.FullName -NewName "android-ndk-r29"
+              Write-Output "Renamed NDK folder"
+            } else {
+              Write-Output "ERROR: NDK folder not found after extraction"
+              Get-ChildItem -Force
               exit 1
-            fi
-          fi
+            }
+          }
           
-          echo "Step 5: Cleanup and verify"
-          rm -f ndk.zip
-          echo "Removed NDK zip file"
+          Write-Output "Step 5: Cleanup and verify"
+          Remove-Item -Force "ndk.zip"
+          Write-Output "Removed NDK zip file"
           
-          if [ -d "android-ndk-r29" ]; then
-            echo "NDK verification: OK"
-            ls -la android-ndk-r29 | head -10
-          else
-            echo "ERROR: NDK verification failed"
+          if (Test-Path "android-ndk-r29") {
+            Write-Output "NDK verification: OK"
+            Get-ChildItem "android-ndk-r29" | Select-Object -First 10
+          } else {
+            Write-Output "ERROR: NDK verification failed"
             exit 1
-          fi
+          }
           
-          cd ..
+          Set-Location ".."
 
       - name: Build and Patch
-        shell: bash
+        shell: pwsh
         run: |
-          set -e
+          $ErrorActionPreference = "Stop"
           
-          echo "Step 1: Clone Frida source"
-          if [ ! -d "build/frida" ]; then
-            echo "Cloning Frida ${{ inputs.frida_version }} (this may take several minutes)..."
-            git clone --recurse-submodules --branch ${{ inputs.frida_version }} --depth 1 \
-              https://github.com/frida/frida.git build/frida
-            echo "Clone complete"
-          else
-            echo "Using existing Frida source"
-          fi
+          Write-Output "Step 1: Clone Frida source"
+          if (-not (Test-Path "build/frida")) {
+            Write-Output "Cloning Frida ${{ inputs.frida_version }} (this may take several minutes)..."
+            git clone --recurse-submodules --branch "${{ inputs.frida_version }}" --depth 1 `
+              "https://github.com/frida/frida.git" "build/frida"
+            Write-Output "Clone complete"
+          } else {
+            Write-Output "Using existing Frida source"
+          }
           
-          echo "Step 2: Execute build script"
-          python3 build.py \
-            --version "${{ inputs.frida_version }}" \
-            --name "${{ inputs.custom_name }}" \
-            --arch "${{ inputs.arch }}" \
-            --skip-clone \
-            --ndk-path "$(pwd)/build/android-ndk-r29" \
-            --extended \
+          Write-Output "Step 2: Execute build script"
+          $ndk_path = "$(Get-Location)\build\android-ndk-r29"
+          python3 build.py `
+            --version "${{ inputs.frida_version }}" `
+            --name "${{ inputs.custom_name }}" `
+            --arch "${{ inputs.arch }}" `
+            --skip-clone `
+            --ndk-path "$ndk_path" `
+            --extended `
             --verify
 
       - name: Verify Output
-        shell: bash
+        shell: pwsh
         run: |
-          echo "Checking output artifacts..."
-          if [ -d "output" ]; then
-            du -sh output/*
-          else
-            echo "Warning: Output directory not found"
-          fi
+          Write-Output "Checking output artifacts..."
+          if (Test-Path "output") {
+            Get-ChildItem -Path "output" -Recurse | 
+              ForEach-Object { if ($_.PSIsContainer) { "{0} ({1})" -f $_.FullName, (Get-ChildItem $_.FullName -Recurse | Measure-Object -Property Length -Sum).Sum } }
+          } else {
+            Write-Output "Warning: Output directory not found"
+          }
 
       - name: Upload Frida Server
         uses: actions/upload-artifact@v4
