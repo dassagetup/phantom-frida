@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       frida_version:
-        description: 'Frida version (e.g. 16.7.19)'
+        description: 'Frida version (e.g. 17.7.2)'
         required: true
-        default: '16.7.19'
+        default: '17.7.2'
       custom_name:
         description: 'Custom name'
         required: true
@@ -21,26 +21,35 @@ on:
           - android-arm
           - android-x86_64
           - android-x86
+      extended:
+        description: 'Enable extended anti-detection'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 jobs:
   build:
-    runs-on: self-hosted
-    timeout-minutes: 120
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: System info
-        shell: pwsh
         run: |
-          Write-Host "=== WSL/Linux Environment ===" -ForegroundColor Green
-          wsl bash -c 'uname -a; python3 --version; git --version; echo "CPU cores: $(nproc)"; echo "Free disk: $(df -h / | tail -1 | awk '\''{print $4}'\'')"'
+          echo "=== Ubuntu Environment ==="
+          uname -a
+          python3 --version
+          git --version
+          echo "CPU cores: $(nproc)"
+          echo "Free disk: $(df -h / | tail -1 | awk '{print $4}')"
 
-      - name: Install dependencies (WSL)
-        shell: pwsh
+      - name: Install dependencies
         run: |
-          wsl bash -c @'
           set -e
           echo "=== Updating package manager ==="
           sudo apt-get update -qq
@@ -53,15 +62,15 @@ jobs:
             python3 \
             python3-pip \
             unzip \
-            wget
+            wget \
+            pkg-config \
+            libglib2.0-dev \
+            libjson-glib-dev
           
           echo "=== Dependency installation complete ==="
-'@
 
       - name: Setup build directory
-        shell: pwsh
         run: |
-          wsl bash -c @'
           set -e
           echo "=== Preparing build environment ==="
           
@@ -74,12 +83,9 @@ jobs:
           cd build
           pwd
           echo "=== Build directory ready ==="
-'@
 
-      - name: Download NDK (Linux version for WSL)
-        shell: pwsh
+      - name: Download Android NDK r29
         run: |
-          wsl bash -c @'
           set -e
           echo "=== Downloading Android NDK r29 (Linux) ==="
           cd build
@@ -106,51 +112,44 @@ jobs:
             exit 1
           fi
           
-          echo "=== Build environment ready ==="
-'@
+          echo "=== NDK ready ==="
 
-      - name: Build Frida
-        shell: pwsh
+      - name: Run build.py
         run: |
-          wsl bash -c @'
           set -e
-          cd build
+          cd "${{ github.workspace }}"
           pwd
           
-          echo "=== Cloning Frida ${{ inputs.frida_version }} ==="
-          if [ ! -d "frida" ]; then
-            git clone --recurse-submodules --branch "${{ inputs.frida_version }}" --depth 1 \
-              "https://github.com/frida/frida.git"
-            echo "✓ Frida cloned"
-          else
-            echo "✓ Frida already cloned"
-          fi
-          
-          echo "=== Starting build process ==="
-          ${{ github.workspace }}/build.py \
+          echo "=== Starting Frida build process ==="
+          python3 build.py \
             --version "${{ inputs.frida_version }}" \
             --name "${{ inputs.custom_name }}" \
             --arch "${{ inputs.arch }}" \
-            --skip-clone \
-            --extended
+            --work-dir ./build \
+            --output-dir ./output \
+            --ndk-path ./build/android-ndk-r29 \
+            --extended=${{ inputs.extended }} \
+            --verify
           
           echo "✓ Build complete"
-'@
 
       - name: Verify Output
-        shell: pwsh
+        if: always()
         run: |
-          if (Test-Path "build/output") {
-            Write-Host "=== Output artifacts ===" -ForegroundColor Green
-            Get-ChildItem -Path "build/output/" -Force
-          } else {
-            Write-Host "WARNING: Output directory not found" -ForegroundColor Yellow
-          }
+          if [ -d "output" ]; then
+            echo "=== Output artifacts ==="
+            ls -lh output/
+            du -sh output/*
+          else
+            echo "WARNING: Output directory not found"
+            exit 1
+          fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         if: success()
         with:
           name: ${{ inputs.custom_name }}-${{ inputs.arch }}
-          path: build/output/
+          path: output/
           retention-days: 7
+          if-no-files-found: error
