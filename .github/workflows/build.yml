@@ -42,22 +42,28 @@ jobs:
           if (Test-Path "build") { Remove-Item -Path "build" -Recurse -Force }
           New-Item -ItemType Directory -Path "build"
           
-          # 2. Download
+          # 2. Download Windows NDK
           $wc = New-Object System.Net.WebClient
-          $wc.DownloadFile("https://dl.google.com/android/repository/android-ndk-r29-linux.zip", "build/ndk.zip")
+          $wc.DownloadFile("https://dl.google.com/android/repository/android-ndk-r29-windows.zip", "build/ndk.zip")
           
-          # 3. Robust Extraction using Shell.Application (prevents path errors)
-          $shell = New-Object -ComObject Shell.Application
-          $zipFile = Get-Item "build/ndk.zip"
-          $destination = Get-Item "build"
-          $shell.NameSpace($destination.FullName).CopyHere($shell.NameSpace($zipFile.FullName).Items())
+          # 3. Extract using native PowerShell
+          Expand-Archive -Path "build/ndk.zip" -DestinationPath "build" -Force
           
-          # 4. Rename: Ensure we find the folder regardless of exact naming
-          $ndkDir = Get-ChildItem -Path "build" -Directory | Where-Object { $_.Name -like "android-ndk-r29*" }
-          Rename-Item -Path $ndkDir.FullName -NewName "android-ndk-r29"
+          # 4. Verify extraction and rename if needed
+          if (Test-Path "build/android-ndk-r29") {
+            Write-Host "NDK already in correct location"
+          } else {
+            $ndkDir = Get-ChildItem -Path "build" -Directory | Where-Object { $_.Name -like "android-ndk-r29*" }
+            if ($ndkDir) {
+              Rename-Item -Path $ndkDir.FullName -NewName "android-ndk-r29"
+              Write-Host "Renamed NDK folder"
+            } else {
+              Write-Host "Warning: NDK folder not found"
+            }
+          }
           
           # 5. Cleanup zip
-          Remove-Item "build/ndk.zip"
+          Remove-Item "build/ndk.zip" -Force
 
       - name: Build and Patch
         shell: powershell
@@ -67,8 +73,7 @@ jobs:
             git clone --recurse-submodules --branch ${{ inputs.frida_version }} --depth 1 https://github.com/frida/frida.git build/frida
           }
           
-          # Execute build script
-          # Note: Backticks (`) are the correct line-continuation character in PowerShell
+          # Execute build script for Frida server
           python build.py --version ${{ inputs.frida_version }} `
             --name ${{ inputs.custom_name }} `
             --arch ${{ inputs.arch }} `
