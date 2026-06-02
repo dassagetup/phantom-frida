@@ -98,31 +98,5 @@ jobs:
             echo "NDK already exists, skipping download"
           fi
           
-          echo "=== Extracting NDK ==="
-          unzip -q "$NDK_FILE"
-          rm "$NDK_FILE"
-          
-          if [ -d "android-ndk-r29" ]; then
-            echo "✓ NDK extracted successfully"
-            ls -d android-ndk-r29
-          else
-            echo "ERROR: NDK extraction failed"
-            ls -la
-            exit 1
-          fi
-          
-          echo "=== NDK ready ==="
-
-      - name: Run build.py
-        run: |
-          set -e
-          cd "${{ github.workspace }}"
-          pwd
-          
-          echo "=== Starting Frida build process ==="
-          
-          # Build command with conditional extended flag
-          BUILD_CMD="python3 build.py --version '${{ inputs.frida_version }}' --name '${{ inputs.custom_name }}' --arch '${{ inputs.arch }}' --work-dir ./build --output-dir ./output --ndk-path ./build/android-ndk-r29 --verify"
-          
-          # Add extended flag only if true (boolean type](#)
+          echo "=== Extracting NDK](#)
 
