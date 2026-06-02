@@ -101,5 +101,54 @@ jobs:
           
           # Verify extraction
           if [ -d "android-ndk-r29" ]; then
-            echo "✓ NDK extracted successfully"](#)
-
+            echo "✓ NDK extracted successfully"
+          else
+            echo "ERROR: NDK extraction failed"
+            exit 1
+          fi
+          
+          echo "=== Build environment ready ==="
+
+      - name: Build Frida
+        shell: bash
+        run: |
+          set -e
+          cd build
+          pwd
+          
+          echo "=== Cloning Frida ${{ inputs.frida_version }} ==="
+          if [ ! -d "frida" ]; then
+            git clone --recurse-submodules --branch "${{ inputs.frida_version }}" --depth 1 \
+              "https://github.com/frida/frida.git"
+            echo "✓ Frida cloned"
+          else
+            echo "✓ Frida already cloned"
+          fi
+          
+          echo "=== Starting build process ==="
+          ${{ github.workspace }}/build.py \
+            --version "${{ inputs.frida_version }}" \
+            --name "${{ inputs.custom_name }}" \
+            --arch "${{ inputs.arch }}" \
+            --skip-clone \
+            --extended
+          
+          echo "✓ Build complete"
+
+      - name: Verify Output
+        shell: bash
+        run: |
+          if [ -d "build/output" ]; then
+            echo "=== Output artifacts ==="
+            ls -lh build/output/
+          else
+            echo "WARNING: Output directory not found"
+          fi
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: ${{ inputs.custom_name }}-${{ inputs.arch }}
+          path: build/output/
+          retention-days: 7
